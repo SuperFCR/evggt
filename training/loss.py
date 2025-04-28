@@ -15,6 +15,214 @@ from math import ceil, floor
 from vggt.utils.pose_enc import extri_intri_to_pose_encoding, pose_encoding_to_extri_intri
 
 
+#========================================== [Falcary Defination] ==========================================#
+def calculate_auc(rel_rangle_deg, rel_tangle_deg, max_threshold=30, return_list=False):
+    """
+    Calculate Area Under Curve (AUC) for rotation and translation errors.
+    
+    Args:
+        rel_rangle_deg (torch.Tensor): Rotation angle errors in degrees
+        rel_tangle_deg (torch.Tensor): Translation angle errors in degrees
+        max_threshold (int): Maximum threshold for AUC calculation
+        return_list (bool): Whether to return raw histogram data
+        
+    Returns:
+        float or tuple: AUC value, or tuple of (auc, histogram) if return_list is True
+    """
+    device = rel_rangle_deg.device
+    
+    # Create histogram bins from 0 to max_threshold
+    histogram = torch.zeros(max_threshold + 1, device=device)
+    
+    # Compute maximum of rotation and translation errors for each sample
+    for i in range(rel_rangle_deg.shape[0]):
+        r_err = rel_rangle_deg[i].item()
+        t_err = rel_tangle_deg[i].item()
+        err = max(r_err, t_err)
+        
+        # Add to histogram if below max_threshold
+        if err <= max_threshold:
+            # Floor to get the correct bin
+            bin_idx = min(int(err), max_threshold)
+            histogram[bin_idx] += 1
+    
+    # Normalize histogram
+    if histogram.sum() > 0:
+        normalized_histogram = histogram / histogram.sum()
+    else:
+        normalized_histogram = histogram
+    
+    # Compute AUC
+    auc = torch.cumsum(normalized_histogram, dim=0).mean()
+    
+    if return_list:
+        return auc, normalized_histogram
+    return auc
+
+
+def huber_loss(pred, target, delta=1.0):
+    """
+    Huber loss function.
+    
+    Args:
+        pred (torch.Tensor): Prediction tensor
+        target (torch.Tensor): Target tensor
+        delta (float): Threshold for switching between L1 and L2 loss
+        
+    Returns:
+        torch.Tensor: Computed Huber loss
+    """
+    diff = pred - target
+    abs_diff = torch.abs(diff)
+    
+    # L1 loss for large differences, L2 loss for small differences
+    squared_loss = 0.5 * diff * diff
+    linear_loss = delta * (abs_diff - 0.5 * delta)
+    
+    # Use squared loss where abs_diff < delta, and linear loss otherwise
+    loss = torch.where(abs_diff < delta, squared_loss, linear_loss)
+    
+    return loss
+
+
+def camera_to_rel_deg(pred_extrinsic, gt_extrinsic, device):
+    """
+    Calculate relative rotation and translation angle errors in degrees.
+    
+    Args:
+        pred_extrinsic (torch.Tensor): Predicted camera extrinsic matrices [B, S, 4, 4]
+        gt_extrinsic (torch.Tensor): Ground truth camera extrinsic matrices [B, S, 4, 4]
+        device: The computing device
+        
+    Returns:
+        tuple: (rel_rangle_deg, rel_tangle_deg) - rotation and translation errors in degrees
+    """
+    batch_size, seq_len = pred_extrinsic.shape[0], pred_extrinsic.shape[1]
+    
+    # Reshape to handle batch and sequence dimensions
+    pred_R = pred_extrinsic.reshape(-1, 4, 4)[:, :3, :3]  # Extract rotation part
+    gt_R = gt_extrinsic.reshape(-1, 4, 4)[:, :3, :3]  # Extract rotation part
+    
+    pred_t = pred_extrinsic.reshape(-1, 4, 4)[:, :3, 3]  # Extract translation part
+    gt_t = gt_extrinsic.reshape(-1, 4, 4)[:, :3, 3]  # Extract translation part
+    
+    valid_mask = torch.ones(batch_size * seq_len, device=device).bool()
+    
+    # Calculate rotation error
+    R_diff = torch.bmm(pred_R, gt_R.transpose(1, 2))  # R_pred * R_gt^T
+    
+    # Calculate rotation angle in degrees (using trace method)
+    # Tr(R) = 1 + 2*cos(theta)
+    R_trace = torch.diagonal(R_diff, dim1=1, dim2=2).sum(dim=1)
+    R_trace = torch.clamp(R_trace, -3.0, 3.0)  # numerical stability
+    rel_rangle = torch.acos((R_trace - 1) / 2)
+    rel_rangle_deg = rel_rangle * 180.0 / torch.pi
+    
+    # Calculate translation error
+    t_norm_pred = torch.norm(pred_t, dim=1, keepdim=True) + 1e-6
+    t_norm_gt = torch.norm(gt_t, dim=1, keepdim=True) + 1e-6
+    
+    # Normalize translation vectors
+    t_pred_normalized = pred_t / t_norm_pred
+    t_gt_normalized = gt_t / t_norm_gt
+    
+    # Calculate the angle between two translation vectors
+    cos_t = torch.sum(t_pred_normalized * t_gt_normalized, dim=1)
+    cos_t = torch.clamp(cos_t, -1.0, 1.0)  # numerical stability
+    rel_tangle = torch.acos(cos_t)
+    rel_tangle_deg = rel_tangle * 180.0 / torch.pi
+    
+    # Filter out invalid entries
+    rel_rangle_deg = rel_rangle_deg[valid_mask]
+    rel_tangle_deg = rel_tangle_deg[valid_mask]
+    
+    return rel_rangle_deg, rel_tangle_deg
+
+
+def gradient_loss_impl2(prediction, target, mask, conf=None):
+    """
+    Alternative implementation of gradient loss.
+    Uses Sobel operators for better gradient estimation.
+    
+    Args:
+        prediction (torch.Tensor): Predicted tensor [B, H, W, C]
+        target (torch.Tensor): Target tensor [B, H, W, C]
+        mask (torch.Tensor): Valid mask [B, H, W]
+        conf (torch.Tensor, optional): Confidence values
+        
+    Returns:
+        torch.Tensor: Computed gradient loss
+    """
+    # Define Sobel kernels for x and y gradients
+    device = prediction.device
+    sobel_x = torch.tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=torch.float32, device=device)
+    sobel_y = torch.tensor([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=torch.float32, device=device)
+    
+    # Expand mask to match prediction dimensions
+    expanded_mask = mask[..., None].expand_as(prediction)
+    
+    # Calculate difference between prediction and target
+    diff = prediction - target
+    diff = diff * expanded_mask
+    
+    total_loss = 0
+    num_channels = prediction.shape[-1]
+    
+    for c in range(num_channels):
+        diff_channel = diff[..., c]  # [B, H, W]
+        
+        # Zero-pad for convolution
+        padded_diff = F.pad(diff_channel.unsqueeze(1), (1, 1, 1, 1), mode='replicate')
+        
+        # Extract patches for convolution
+        patches = F.unfold(padded_diff, kernel_size=3, padding=0)
+        B, _, N = patches.shape
+        patches = patches.view(B, 9, -1).permute(0, 2, 1).view(B, -1, 3, 3)
+        
+        # Apply Sobel operators
+        grad_x = (patches * sobel_x.view(1, 1, 3, 3)).sum(dim=(-1, -2))
+        grad_y = (patches * sobel_y.view(1, 1, 3, 3)).sum(dim=(-1, -2))
+        
+        # Reshape back to image dimensions
+        H, W = diff_channel.shape[1], diff_channel.shape[2]
+        grad_x = grad_x.view(B, H, W)
+        grad_y = grad_y.view(B, H, W)
+        
+        # Calculate gradient magnitude
+        grad_mag = torch.sqrt(grad_x**2 + grad_y**2 + 1e-8)
+        
+        # Apply mask
+        valid_mask = mask[:, 1:-1, 1:-1]  # Interior pixels
+        grad_mag = grad_mag * valid_mask
+        
+        # Apply confidence weighting if provided
+        if conf is not None:
+            conf_interior = conf[:, 1:-1, 1:-1]  # Interior pixels
+            gamma = 1.0
+            alpha = 0.2
+            loss_channel = gamma * grad_mag * conf_interior - alpha * torch.log(conf_interior)
+        else:
+            loss_channel = grad_mag
+        
+        # Clamp to avoid extreme values
+        loss_channel = loss_channel.clamp(max=100)
+        
+        # Add to total loss
+        valid_count = valid_mask.sum() + 1e-8
+        channel_loss = loss_channel.sum() / valid_count
+        total_loss += channel_loss
+    
+    # Average over channels
+    return total_loss / num_channels
+
+
+
+
+
+
+
+#========================================== [Falcary Defination] ==========================================#
+
 def check_and_fix_inf_nan(loss_tensor, loss_name, hard_max = 100):
     """
     Checks if 'loss_tensor' contains inf or nan. If it does, replace those 
