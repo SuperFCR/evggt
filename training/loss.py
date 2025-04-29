@@ -215,10 +215,75 @@ def gradient_loss_impl2(prediction, target, mask, conf=None):
     # Average over channels
     return total_loss / num_channels
 
-
-
-
-
+def closed_form_scale_and_shift(pred_pts3d, gt_pts3d, valid_mask):
+    """
+    Calculate the optimal closed-form scaling and shift to align predicted 3D points to ground truth 3D points.
+    
+    Args:
+        pred_pts3d (torch.Tensor): Predicted 3D points [B, S, H, W, 3]
+        gt_pts3d (torch.Tensor): Ground truth 3D points [B, S, H, W, 3]
+        valid_mask (torch.Tensor): Valid point mask [B, S, H, W]
+        
+    Returns:
+        tuple: (scale, shift) where scale is a scalar tensor and shift is a 3D tensor for translation
+    """
+    # Expand dimensions for broadcasting
+    batch_size, seq_len = pred_pts3d.shape[0], pred_pts3d.shape[1]
+    
+    # Reshape to treat all points equally
+    pred_pts3d_flat = pred_pts3d.reshape(batch_size, -1, 3)  # [B, S*H*W, 3]
+    gt_pts3d_flat = gt_pts3d.reshape(batch_size, -1, 3)      # [B, S*H*W, 3]
+    valid_mask_flat = valid_mask.reshape(batch_size, -1)     # [B, S*H*W]
+    
+    # Initialize scale and shift tensors
+    scale = torch.ones(batch_size, 1, 1, device=pred_pts3d.device)
+    shift = torch.zeros(batch_size, 1, 3, device=pred_pts3d.device)
+    
+    # Calculate optimal scale and shift for each batch
+    for b in range(batch_size):
+        valid_b = valid_mask_flat[b]
+        
+        # Skip if no valid points
+        if valid_b.sum() < 10:
+            continue
+            
+        pred_b = pred_pts3d_flat[b, valid_b]  # [N, 3]
+        gt_b = gt_pts3d_flat[b, valid_b]      # [N, 3]
+        
+        # Calculate centroids
+        pred_centroid = pred_b.mean(dim=0, keepdim=True)  # [1, 3]
+        gt_centroid = gt_b.mean(dim=0, keepdim=True)      # [1, 3]
+        
+        # Center the points
+        pred_centered = pred_b - pred_centroid  # [N, 3]
+        gt_centered = gt_b - gt_centroid        # [N, 3]
+        
+        # Calculate optimal scale (Procrustes analysis)
+        # scale = sum(gt_centered · pred_centered) / sum(pred_centered^2)
+        numerator = (gt_centered * pred_centered).sum()
+        denominator = (pred_centered ** 2).sum()
+        
+        # Avoid division by zero
+        if denominator < 1e-10:
+            scale_b = torch.tensor(1.0, device=pred_pts3d.device)
+        else:
+            scale_b = numerator / denominator
+            
+        # Clamp scale to reasonable range to avoid extreme values
+        scale_b = torch.clamp(scale_b, 0.1, 10.0)
+        
+        # Calculate optimal shift
+        shift_b = gt_centroid - scale_b * pred_centroid
+        
+        # Store the results
+        scale[b, 0, 0] = scale_b
+        shift[b, 0, :] = shift_b
+    
+    # Reshape scale for broadcasting with the original tensor shape
+    scale = scale.view(batch_size, 1, 1, 1, 1)
+    shift = shift.view(batch_size, 1, 1, 1, 3)
+    
+    return scale, shift
 
 
 #========================================== [Falcary Defination] ==========================================#
