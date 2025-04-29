@@ -26,14 +26,65 @@ The library is divided into eight sub-libraries:
     └── visualization
 ```
 
-🔥 [2025-04-29] Support ESIM .npz file to H5 files, the script in 'utils/event_utils/lib/data_formats/npz_to_h5.py', and support h5 to mp4 visualization.
+## 🔥 [2025-04-29] Event Data Processing & Visualization Tools
 
-'''bash
+### New Features:
+- **ESIM .npz to H5 Conversion**: Convert ESIM simulator .npz outputs to standard H5 event files
+- **Enhanced Event Visualization**: Generate MP4 videos from H5 event files with customizable parameters
+
+
+### Installation
+
+#### Requirements
+
+- Python 3.8+
+- OpenCV
+- NumPy
+- H5py
+- tqdm
+
+### Setup
+
+```bash
+git clone https://github.com/SuperFCR/evggt.git --branch training
 cd evggt/utils/event_utils/
-python utils/event_utils/lib/data_formats/npz_to_h5.py <your .npz output folder> --output_dir <output_folder>
-python visualize_event_mp4.py <h5 files>  --output <output_folder> --width 512 --height 288  --fps 60 --window 0.0005 --max_events <max_event_num>
-'''
+pip install -r requirements.txt
+```
 
+### Usage:
+
+#### 1. Convert ESIM .npz files to H5 format
+```bash
+# Basic usage
+python utils/event_utils/lib/data_formats/npz_to_h5.py <npz_input_folder> --output_dir <h5_output_folder>
+```
+
+#### 2. Visualize H5 events as MP4 videos
+```bash
+# Basic usage
+python utils/event_utils/visualize_event_mp4.py <h5_file> --output <mp4_output_path> \
+  --width <width> --height <height> --fps <fps> --window <time_window> \
+  [--max_events <max_events>] [--frame_limit <max_frames>]
+
+```
+
+### Parameters Explained:
+- **width/height**: Resolution of output video (pixels)
+- **fps**: Frames per second of output video
+- **window**: Time window for each frame (seconds)
+- **max_events**: Maximum number of events to process
+- **frame_limit**: Maximum number of frames to generate
+
+### Quick Start:
+```bash
+# Clone into your workspace
+cd evggt/
+# Convert ESIM data
+python utils/event_utils/lib/data_formats/npz_to_h5.py ./simulator_data/ --output_dir ./h5_events/
+# Generate visualization
+python utils/event_utils/visualize_event_mp4.py ./h5_events/scene_1.h5 --output ./videos/scene_1.mp4 \
+  --width 512 --height 288 --fps 60 --window 0.0005 --max_events 1000000
+```
 
 
 ## augmentation
