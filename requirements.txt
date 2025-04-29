@@ -7,3 +7,5 @@ einops
 safetensors
 
 dv-processing
+matplotlib
+mayavi

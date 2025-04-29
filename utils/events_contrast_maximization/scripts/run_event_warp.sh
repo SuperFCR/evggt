@@ -12,4 +12,7 @@ python /mnt/workspace/ywb/WorldNew/evggt/utils/events_contrast_maximization/util
                     --start_idx 20000 --num_events 100000
                     --save_vis \
                     --visualize_warped
-                    
+python visualize_events.py /mnt/workspace/ywb/WorldNew/evggt/data/event.h5 
+python visualize.py /mnt/workspace/ywb/WorldNew/evggt/data/event.h5 
+
+python visualize_event_mp4.py /mnt/workspace/ywb/WorldNew/evggt/data/event.h5  --output /mnt/workspace/ywb/WorldNew/evggt/utils/outputs/event_video.mp4 --width 512 --height 288  --fps 60 --window 0.0005 --max_events 100000

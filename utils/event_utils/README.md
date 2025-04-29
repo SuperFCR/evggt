@@ -26,6 +26,16 @@ The library is divided into eight sub-libraries:
     └── visualization
 ```
 
+🔥 [2025-04-29] Support ESIM .npz file to H5 files, the script in 'utils/event_utils/lib/data_formats/npz_to_h5.py', and support h5 to mp4 visualization.
+
+'''bash
+cd evggt/utils/event_utils/
+python utils/event_utils/lib/data_formats/npz_to_h5.py <your .npz output folder> --output_dir <output_folder>
+python visualize_event_mp4.py <h5 files>  --output <output_folder> --width 512 --height 288  --fps 60 --window 0.0005 --max_events <max_event_num>
+'''
+
+
+
 ## augmentation
 While the `data_loaders` learning library contains some code for tensor augmentation (such as adding Gaussian noise, rotations, flips, random crops etc), the augmentation library allows for these operations to occur on the raw events.
 This functionality is contained within `event_augmentation.py`.

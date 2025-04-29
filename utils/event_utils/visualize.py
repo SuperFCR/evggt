@@ -9,7 +9,7 @@ from lib.visualization.visualizers import TimeStampImageVisualizer, EventImageVi
 
 if __name__ == "__main__":
     """
-    Quick demo
+        Quick demo
     """
     parser = argparse.ArgumentParser()
     parser.add_argument("path", help="memmap events path")
@@ -64,6 +64,7 @@ if __name__ == "__main__":
         loader_type = NpyDataset
     else:
         loader_type = DynamicH5Dataset
+    
     dataloader = loader_type(args.path, voxel_method={'method':args.plot_method, 't':args.w_width,
         'k':args.w_width, 'sliding_window_t':args.sw_width, 'sliding_window_w':args.sw_width, 'num_frames':args.num_frames},
             return_events=True, return_voxelgrid=False, return_frame=True, return_flow=True, return_format='numpy')
@@ -91,6 +92,8 @@ if __name__ == "__main__":
 
     plot_data = {'events':np.ones((0, 4)), 'frame':[], 'frame_ts':[]}
     print("{} frames in sequence".format(len(dataloader)))
+    
+    
     for i, data in enumerate(tqdm(dataloader)):
         plot_data['events'] = np.concatenate((plot_data['events'], data['events']))
         if args.plot_method == 'between_frames':
